@@ -1,0 +1,250 @@
+<!doctype html>
+<link rel="stylesheet" href="style.css">
+<html>
+  <head>
+    <script src="https://pixijs.download/release/pixi.min.js"></script>
+    <script src="gameloader.js"></script>
+    <script src="classes.js"></script>
+    <script src="functions.js"></script>
+  </head>
+  <body>
+    <script>
+      // Create the application helper and add its render target to the page
+      let app = new PIXI.Application({ width: 640, height: 360, resizeTo: window });
+      PIXI.settings.SCALE_MODE = PIXI.SCALE_MODES.NEAREST;
+
+
+      document.body.appendChild(app.view);
+
+      //Big tile energy
+      const container = new PIXI.Container();
+      app.stage.addChild(container);
+
+      tilemap = Array(50).fill(0).map(x => Array(50).fill(0));
+      let campos = new PIXI.Point(0, 0);
+      tilemapfront = Array(50).fill(0).map(x => Array(50).fill(0));
+
+
+      //Load game resources
+      const sprites = {};
+      
+      let donesetup = false;
+      loadResources(sprites);
+      
+      //Setting up mouse events
+      let oldmouse = new PIXI.Point(0, 0);
+      let mousedown = false;
+      let rightmousedown = false;
+      let mousejustdown = false;
+      let mousejustup = false;
+
+      let zoomobj = {oldzoom: 1.0, targetzoom: 1.0, interpstep: 0.0, maxzoom: 4.0, minzoom: 0.25, interpolatezoom: function(){return (this.oldzoom * (1.0 - this.interpstep)) + (this.targetzoom * this.interpstep)}};
+
+      //Disable right click context menu
+      document.addEventListener('contextmenu', (event) =>
+      {
+        event.preventDefault();
+      });
+
+      document.body.addEventListener('mousedown',(event) => 
+      {
+        if(event.buttons & 0x1)
+        {
+          mousejustdown = true;
+          mousedown = true;
+        }
+      });
+
+      document.body.addEventListener('mouseup',(event) => 
+      {
+        if(event.buttons & 0x1)//0x1 = left click
+         mousejustup = true;
+      });
+
+      document.body.addEventListener('wheel',(event) => 
+      {
+        console.log(event);
+        if(event.wheelDelta > 0)//Scroll up
+        {
+          zoomobj.oldzoom = zoomobj.interpolatezoom();
+          zoomobj.targetzoom = Math.min(zoomobj.targetzoom * 2, zoomobj.maxzoom);
+        }
+        else
+        {
+          zoomobj.oldzoom = zoomobj.interpolatezoom();
+          zoomobj.targetzoom = Math.max(zoomobj.targetzoom / 2, zoomobj.minzoom);
+        }
+        zoomobj.interpstep = 0;
+      });
+
+      document.body.addEventListener('mousemove',(event) => 
+      {
+        mousedown = event.buttons & 0x1;
+        rightmousedown = event.buttons & 0x2;// 0x2 = right click
+        if(rightmousedown)
+        {
+          campos.x = campos.x - (oldmouse.x - event.clientX);
+          campos.y = campos.y - (oldmouse.y - event.clientY);
+        }
+        oldmouse.x = event.clientX;
+        oldmouse.y = event.clientY;
+      });
+
+     
+      let elapsed = 0.0;
+      
+      let placecontrols = {mousestart: new PIXI.Point(0, 0), lasttile: new PIXI.Point(0, 0)}
+     
+      //Main loop
+      let maintick = app.ticker.add((delta) => 
+      {
+        elapsed += delta;
+        //First setup after loading
+        if(Object.keys(sprites).length >= 1 && !donesetup)
+        {
+          donesetup = true;
+          for(let x = 0; x < tilemap.length; x++)
+          {
+            for(let y = 0; y < tilemap[0].length; y++)
+            {
+              const tile = new PIXI.Sprite(sprites.tile0);
+              tile.anchor.set(0.5);
+              tile.x = x * 16;
+              tile.y = y * 16;
+              tilemap[x][y] = new TileData(tile, x, y);
+              container.addChild(tile);
+            }
+          }
+          console.log(tilemap);
+        }
+        if(!donesetup)
+          return;
+        //Post setup
+        //Zoom handling
+        if(zoomobj.interpstep < 1.0)
+        {
+          zoomobj.interpstep = Math.min(1.0, zoomobj.interpstep + delta / 8);
+
+
+          let tilex = Math.round((app.view.width / 2 - container.x) / container.scale.x);
+          let tiley = Math.round((app.view.height / 2 - container.y) / container.scale.x);
+          const currzoom = zoomobj.interpolatezoom();
+          //let screencent = new PIXI.Point(app.view.width / 2, app.view.height / 2);//We want to zoom into the center of the screen
+          let oldpoint = new PIXI.Point(tilex, tiley);
+
+          const oldcenter = container.toGlobal(oldpoint);
+          
+          container.scale.x = currzoom;
+          container.scale.y = currzoom;
+
+          campos.x -= container.toGlobal(oldpoint).x - oldcenter.x; 
+          campos.y -= container.toGlobal(oldpoint).y - oldcenter.y;
+
+        }
+
+
+        if(mousedown)
+        {
+          const tilesize = container.scale.x * 16;
+          let tilex = Math.round((oldmouse.x - container.x) / tilesize);
+          let tiley = Math.round((oldmouse.y - container.y) / tilesize);
+          if(mousejustdown)
+          {
+            placecontrols.mousestart.x = tilex;
+            placecontrols.mousestart.y = tiley;
+
+            placecontrols.lasttile.x = tilex;
+            placecontrols.lasttile.y = tiley;
+          }
+
+          let lt = placecontrols.lasttile;
+          if(isInBounds(tilemap, tilex, tiley) && (tilex != lt.x || tiley != lt.y))
+          {
+            if(isInBounds(tilemap, lt.x, lt.y))
+            {
+              if(tilex > lt.x)
+              {
+                tilemap[lt.x][lt.y].convdata.right = 2;
+                tilemap[tilex][tiley].convdata.left = 1;
+              }
+              else if(tilex < lt.x)
+              {
+                tilemap[lt.x][lt.y].convdata.left = 2;
+                tilemap[tilex][tiley].convdata.right = 1;
+              }
+              else if(tiley > lt.y)
+              {
+                tilemap[lt.x][lt.y].convdata.down = 2;
+                tilemap[tilex][tiley].convdata.up = 1;
+              }
+              else if(tiley < lt.y)
+              {
+                tilemap[lt.x][lt.y].convdata.up = 2;
+                tilemap[tilex][tiley].convdata.down = 1;
+              }
+              console.log(lt);
+              console.log(tilemap[tilex][tiley].convdata);
+
+              //Sprite updating woo
+              let newtile = determineConveyorTex(tilemap, tilex, tiley, sprites);
+              if(tilemap[tilex][tiley].foresprite != null)
+              {
+                tilemap[tilex][tiley].foresprite.texture = newtile.newtex;
+              }
+              else
+              {
+                const tile = new PIXI.Sprite(newtile.newtex);
+                tile.anchor.set(0.5);
+                tile.x = tilex * 16;
+                tile.y = tiley * 16;
+                tilemap[tilex][tiley].foresprite = tile;
+                container.addChild(tile);
+              }
+              tilemap[tilex][tiley].foresprite.angle = newtile.newrot * 90;
+              
+
+              //Sprite updating part 2
+              newtile = determineConveyorTex(tilemap, lt.x, lt.y, sprites);
+              if(tilemap[lt.x][lt.y].foresprite != null)
+              {
+                tilemap[lt.x][lt.y].foresprite.texture = newtile.newtex;
+              }
+              else
+              {
+                const tile = new PIXI.Sprite(newtile.newtex);
+                tile.anchor.set(0.5);
+                tile.x = lt.x * 16;
+                tile.y = lt.y * 16;
+                tilemap[lt.x][lt.y].foresprite = tile;
+                container.addChild(tile);
+              }
+              tilemap[lt.x][lt.y].foresprite.angle = newtile.newrot * 90;
+              
+            }
+
+            console.log(tilex, tiley);
+            placecontrols.lasttile.x = tilex;
+            placecontrols.lasttile.y = tiley;
+            
+
+            /*if(tilemap[tilex][tiley].floorsprite.visible)
+              tilemap[tilex][tiley].floorsprite.visible = false;
+            else
+              tilemap[tilex][tiley].floorsprite.visible = true;*/
+          }
+        }
+
+
+        //app.width = window.innerWidth;
+        //app.height = window.innerHeight;
+        container.x = campos.x;
+        container.y = campos.y;
+
+
+        mousejustdown = false;
+        mousejustup = false;
+
+      });
+    </script>
+  </body>
+</html>
